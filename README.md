@@ -200,6 +200,16 @@ git tag -s v1.2.3 -m "Release v1.2.3"
 git push origin v1.2.3
 ```
 
+> [!IMPORTANT]
+> **Push the tag standalone, not bundled with a branch push.** GitHub
+> sometimes consolidates a combined branch + tag push into a single event
+> and silently drops the tag-trigger, leaving the workflow un-fired (and
+> you get no email). Avoid `git push --follow-tags`,
+> `git push origin main --tags`, and your IDE's "push with tags" button.
+> Make sure `main` is already on `origin` *before* you run the two
+> commands above. If a tag does end up un-triggered, see
+> [Manual dispatch](#manual-dispatch-re-run-without-re-tagging) below.
+
 Use `git tag -a` instead of `-s` if you don't sign tags. Watch the run in
 the repo's **Actions** tab. On success the release appears under **Releases**
 with three assets attached:
