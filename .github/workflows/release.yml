@@ -28,6 +28,13 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual fallback. Dispatch from the Actions tab and pick a `v*` tag from
+  # the "Use workflow from" ref dropdown — useful for re-running a failed
+  # release without re-tagging, or for recovering when a tag push didn't
+  # register a PushEvent (a known GitHub edge case for combined branch+tag
+  # pushes). The tag-only guard below refuses dispatches on a branch ref so
+  # `main` can't accidentally produce a release.
+  workflow_dispatch:
 
 permissions:
   contents: write   # create release + push CHANGELOG.md back to main
@@ -43,6 +50,16 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Guard against non-tag dispatch
+        # `workflow_dispatch` lets users pick any ref — refuse branches so
+        # someone clicking "Run workflow" on `main` cannot accidentally cut
+        # a release. Tag pushes are unaffected (`github.ref_type == 'tag'`).
+        if: github.ref_type != 'tag'
+        shell: bash
+        run: |
+          echo "::error::This workflow must run against a tag ref. Got '${GITHUB_REF}' (ref_type='${{ github.ref_type }}'). Pick a v* tag from the 'Use workflow from' dropdown."
+          exit 1
+
       - name: Checkout (full history for git-cliff)
         uses: actions/checkout@v5
         with:

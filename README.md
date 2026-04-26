@@ -1,5 +1,14 @@
 # Claude Code Plugin Manager
 
+[![CI](https://github.com/akash07k/cc-plugin-manager/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/akash07k/cc-plugin-manager/actions/workflows/ci.yml)
+[![Release](https://github.com/akash07k/cc-plugin-manager/actions/workflows/release.yml/badge.svg)](https://github.com/akash07k/cc-plugin-manager/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/akash07k/cc-plugin-manager?display_name=tag&sort=semver)](https://github.com/akash07k/cc-plugin-manager/releases/latest)
+[![Run release workflow](https://img.shields.io/badge/Actions-Run%20release-2ea44f?logo=github)](https://github.com/akash07k/cc-plugin-manager/actions/workflows/release.yml)
+
+> The **Run release** badge above takes you to the workflow page; click
+> **Run workflow** there, pick a `v*` tag from the **Use workflow from**
+> dropdown, and confirm. See [Releasing](#releasing) for the full flow.
+
 An accessible wxPython desktop GUI for bulk-managing
 [Claude Code](https://claude.com/claude-code) plugins. Select plugins from a
 curated list and install, update, or uninstall them in one run — without
@@ -222,6 +231,34 @@ fails, so nothing is uploaded. Delete the tag, fix, and re-tag:
 git push --delete origin v1.2.3   # remove the bad tag from the remote
 git tag -d v1.2.3                 # remove the local tag
 # fix the underlying issue, commit, then re-tag
+```
+
+### Manual dispatch (re-run without re-tagging)
+
+The workflow also exposes a `workflow_dispatch` trigger, so you can
+re-run a release for an existing tag without deleting and re-pushing it.
+This is useful when a tag push didn't register a workflow run (a known
+GitHub edge case if you push branch + tag together) or when you want to
+re-attempt a failed release after a transient infra issue.
+
+1. Click the **Run release** badge at the top of this README, or open
+   `Actions → Release` directly.
+2. Click **Run workflow**.
+3. In the **Use workflow from** dropdown, pick the `v*` tag you want to
+   release.
+4. Click **Run workflow** to confirm.
+
+The workflow refuses to run if you pick a branch (e.g. `main`) — the
+tag-only guard keeps a stray click from accidentally cutting a release
+off `HEAD`.
+
+If you push branch + tag together (e.g. `git push --follow-tags`) and
+the workflow doesn't fire, the cleanest fix is to push the tag again as
+a standalone operation so GitHub records a clean tag-push event:
+
+```bash
+git push --delete origin v1.2.3
+git push origin v1.2.3
 ```
 
 ### End-user install notes
