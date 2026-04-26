@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pure-logic tests (data, cli, worker) import zero wx code. Catching
+  # path/encoding portability bugs on Linux is faster than waiting for the
+  # Windows job, and skipping wxPython here avoids the slow GTK build.
+  logic-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install package without GUI deps
+        run: |
+          pip install -e . --no-deps
+          pip install pytest pytest-mock ruff mypy
+
+      - name: Lint (ruff) — pure-logic modules and their tests
+        run: ruff check cc_plugin_manager/data.py cc_plugin_manager/cli.py cc_plugin_manager/worker.py tests/test_data.py tests/test_cli.py tests/test_worker.py
+
+      - name: Type-check (mypy strict) — pure-logic modules
+        run: mypy cc_plugin_manager/data.py cc_plugin_manager/cli.py cc_plugin_manager/worker.py
+
+      - name: Tests (pytest) — pure-logic only
+        run: pytest -q tests/test_data.py tests/test_cli.py tests/test_worker.py
+
+  # Windows is the primary target. wxPython has native wheels and the
+  # screen-reader behaviour we care about is Windows-specific. The full
+  # gate including UI smoke tests runs here.
+  full-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type-check (mypy strict on data/cli/worker)
+        run: uv run mypy cc_plugin_manager/data.py cc_plugin_manager/cli.py cc_plugin_manager/worker.py
+
+      - name: Tests (pytest)
+        run: uv run pytest -q

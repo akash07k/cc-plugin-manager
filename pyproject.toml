@@ -1,0 +1,60 @@
+[project]
+name = "cc-plugin-manager"
+version = "1.0.0"
+description = "Accessible desktop manager for Claude Code plugins"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "wxPython>=4.2,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3",
+    "pytest-cov>=5",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+build = [
+    "pyinstaller>=6.10",
+]
+
+[project.scripts]
+cc-plugin-manager = "cc_plugin_manager.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cc_plugin_manager*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+
+[[tool.mypy.overrides]]
+# Strict on the three pure-logic modules. __main__ is intentionally not strict
+# because it imports the wx-based UI graph, where subclassing wx (typed as
+# Any) trips strict checks. The wx layer carries its own discipline through
+# manual review and the smoke-test checklist.
+module = [
+    "cc_plugin_manager.data",
+    "cc_plugin_manager.cli",
+    "cc_plugin_manager.worker",
+]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["wx.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
