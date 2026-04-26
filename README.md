@@ -170,6 +170,76 @@ window) and ship `plugins.json` as a bundled data file.
 
 Project layout and conventions are documented in [`CLAUDE.md`](CLAUDE.md).
 
+## Releasing
+
+Releases are cut by [`.github/workflows/release.yml`](.github/workflows/release.yml)
+on every pushed tag matching `v*`. The workflow runs all four CI gates,
+builds two PyInstaller artifacts on `windows-latest`, and publishes a GitHub
+release with assets attached — no manual asset uploading.
+
+**Before tagging:**
+
+1. Bump `[project].version` in `pyproject.toml` (the workflow refuses to
+   publish if the tag and pyproject disagree).
+2. Run `dev.bat check` locally to catch anything CI would reject.
+3. Commit (`chore(release): v1.2.3`) and push to `main`.
+
+**Cut a stable release** (replace `1.2.3` with your version):
+
+```bash
+git tag -s v1.2.3 -m "Release v1.2.3"
+git push origin v1.2.3
+```
+
+Use `git tag -a` instead of `-s` if you don't sign tags. Watch the run in
+the repo's **Actions** tab. On success the release appears under **Releases**
+with three assets attached:
+
+| Asset                                        | Description                            |
+|----------------------------------------------|----------------------------------------|
+| `cc-plugin-manager-vX.Y.Z-windows-x64.zip`   | Onedir build (faster startup)          |
+| `cc-plugin-manager-vX.Y.Z-windows-x64.exe`   | Single-file build (slower cold start)  |
+| `SHA256SUMS.txt`                             | SHA-256 checksums of both binaries     |
+
+The release body is auto-generated from Conventional Commits via
+[git-cliff](https://git-cliff.org/) and includes a SmartScreen advisory plus
+verification instructions. After a stable release, `CHANGELOG.md` is
+regenerated and committed back to `main` (best-effort — won't fail the
+release if `main` is branch-protected).
+
+**Cut a pre-release** — tags ending in `-rc.*`, `-beta.*`, or `-alpha.*` are
+auto-marked as pre-release and stay off the repo's "Latest" badge:
+
+```bash
+git tag -s v1.2.3-rc.1 -m "Release candidate"
+git push origin v1.2.3-rc.1
+```
+
+**If a tagged build fails:** the workflow refuses to publish if any gate
+fails, so nothing is uploaded. Delete the tag, fix, and re-tag:
+
+```bash
+git push --delete origin v1.2.3   # remove the bad tag from the remote
+git tag -d v1.2.3                 # remove the local tag
+# fix the underlying issue, commit, then re-tag
+```
+
+### End-user install notes
+
+The Windows binaries are **not code-signed**. SmartScreen and some antivirus
+tools will warn on first launch — if you trust the source: right-click the
+`.exe` → **Properties** → tick **Unblock** → **OK**, then launch normally.
+
+Verify your download against `SHA256SUMS.txt`:
+
+```powershell
+Get-FileHash .\cc-plugin-manager-v1.2.3-windows-x64.exe -Algorithm SHA256
+```
+
+```bash
+sha256sum -c SHA256SUMS.txt    # Git Bash / WSL
+```
+
 ## License
 
 [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only).
