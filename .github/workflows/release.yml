@@ -1,0 +1,237 @@
+name: Release
+
+# Tag-driven release pipeline.
+#
+# Trigger: push of a tag matching `v*` (e.g. v1.0.0, v1.2.0-rc.1, v0.4.0-beta.2).
+#
+# What happens:
+#   1. Verifies the tag's version matches `pyproject.toml`.
+#   2. Runs the four canonical CI gates (lint, format-check, types, tests).
+#      Mirrors `dev.bat check` exactly, so a CI failure points at the same
+#      gate a developer would hit locally.
+#   3. Builds two PyInstaller artifacts on windows-latest:
+#        - cc-plugin-manager-<tag>-windows-x64.zip   (onedir, faster startup)
+#        - cc-plugin-manager-<tag>-windows-x64.exe   (onefile, easier to ship)
+#   4. Computes SHA256SUMS.txt covering both binaries.
+#   5. Generates release notes via git-cliff from Conventional Commits, and
+#      regenerates the in-repo CHANGELOG.md.
+#   6. Publishes a GitHub release with the assets attached. Tags ending in
+#      `-rc.*`, `-beta.*`, or `-alpha.*` are auto-marked as pre-release and
+#      do NOT replace the "Latest" badge.
+#   7. Best-effort: commits the regenerated CHANGELOG.md back to main with
+#      `[skip ci]`. Wrapped in `continue-on-error` so a branch-protected main
+#      doesn't block the release itself.
+#
+# No code signing — the release notes carry a SmartScreen advisory.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # create release + push CHANGELOG.md back to main
+
+concurrency:
+  # Don't cancel a release mid-flight (assets half-uploaded would be ugly).
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish ${{ github.ref_name }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (full history for git-cliff)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (dev + build)
+        run: uv sync --extra dev --extra build --frozen
+
+      # ----- Tag <-> pyproject version gate -----
+
+      - name: Verify pyproject version matches tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          tag_version="${tag#v}"
+          py_version=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "Tag       : $tag (declares version $tag_version)"
+          echo "pyproject : $py_version"
+          if [ "$tag_version" != "$py_version" ]; then
+            echo "::error::Tag $tag declares version $tag_version, but pyproject.toml has $py_version. Bump pyproject.toml before tagging."
+            exit 1
+          fi
+
+      - name: Determine if this is a pre-release
+        id: prerel
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" =~ -(rc|beta|alpha)([.\-]|$) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Detected pre-release: $tag"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Stable release: $tag"
+          fi
+
+      # ----- Quality gates (same four as `dev.bat check`) -----
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format --check)
+        run: uv run ruff format --check .
+
+      - name: Type check (mypy strict on data/cli/worker)
+        run: uv run mypy cc_plugin_manager/data.py cc_plugin_manager/cli.py cc_plugin_manager/worker.py
+
+      - name: Tests (pytest)
+        run: uv run pytest -q
+
+      # ----- Build artifacts -----
+      #
+      # Order matters: zip the onedir output BEFORE running the onefile build,
+      # because `scripts/build_exe.py` wipes `dist/` on each invocation.
+
+      - name: Build onedir
+        run: uv run python scripts/build_exe.py
+
+      - name: Stage onedir as zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          # 7z is preinstalled on windows-latest and produces deterministic
+          # zips faster than PowerShell's Compress-Archive.
+          7z a -tzip "release-assets/cc-plugin-manager-${GITHUB_REF_NAME}-windows-x64.zip" "./dist/cc-plugin-manager"
+          ls -la release-assets/
+
+      - name: Build onefile
+        run: uv run python scripts/build_exe.py --onefile
+
+      - name: Stage onefile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "dist/cc-plugin-manager.exe" "release-assets/cc-plugin-manager-${GITHUB_REF_NAME}-windows-x64.exe"
+          ls -la release-assets/
+
+      - name: Compute SHA256SUMS.txt
+        shell: bash
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          sha256sum *.zip *.exe > SHA256SUMS.txt
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
+
+      # ----- Changelog generation (git-cliff, from Conventional Commits) -----
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate release notes (latest tag section only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git-cliff --config cliff.toml --latest --strip all --output release-notes.md
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+
+      - name: Regenerate full CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          git-cliff --config cliff.toml --tag "${GITHUB_REF_NAME}" --output CHANGELOG.md
+          echo "--- CHANGELOG.md (head) ---"
+          head -40 CHANGELOG.md
+
+      - name: Compose final release body (with SmartScreen advisory)
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "> [!IMPORTANT]"
+            echo "> **Unsigned binary notice.** This release is not code-signed. Windows"
+            echo "> SmartScreen and some antivirus tools may warn you on first launch."
+            echo "> If you trust the source: right-click the \`.exe\` -> **Properties** ->"
+            echo "> tick **Unblock** -> **OK**, then launch normally."
+            echo ">"
+            echo "> **Verify your download** with \`SHA256SUMS.txt\`:"
+            echo "> - PowerShell: \`Get-FileHash .\\cc-plugin-manager-*.exe -Algorithm SHA256\`"
+            echo "> - Git Bash:   \`sha256sum -c SHA256SUMS.txt\`"
+            echo
+            echo "## Downloads"
+            echo
+            echo "- **\`cc-plugin-manager-${GITHUB_REF_NAME}-windows-x64.zip\`** -- onedir build (faster startup; unpack and run \`cc-plugin-manager.exe\`)."
+            echo "- **\`cc-plugin-manager-${GITHUB_REF_NAME}-windows-x64.exe\`** -- single-file build (one click; slower cold start)."
+            echo "- **\`SHA256SUMS.txt\`** -- checksums for both artifacts."
+            echo
+          } > release-body.md
+          cat release-notes.md >> release-body.md
+          echo "--- final release body ---"
+          cat release-body.md
+
+      # ----- Publish -----
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-body.md
+          prerelease: ${{ steps.prerel.outputs.is_prerelease == 'true' }}
+          # `make_latest=true` only for stable tags; pre-releases stay off the
+          # repo's "Latest" badge.
+          make_latest: ${{ steps.prerel.outputs.is_prerelease == 'true' && 'false' || 'true' }}
+          files: |
+            release-assets/cc-plugin-manager-*-windows-x64.zip
+            release-assets/cc-plugin-manager-*-windows-x64.exe
+            release-assets/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+
+      # ----- Best-effort: commit updated CHANGELOG.md back to main -----
+      #
+      # Skipped for pre-releases (don't churn main with rc/beta noise).
+      # `continue-on-error` so a branch-protected main can't block the release.
+
+      - name: Commit updated CHANGELOG.md to main
+        if: steps.prerel.outputs.is_prerelease != 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Save the just-generated CHANGELOG out of the workspace so a branch
+          # switch doesn't clobber it.
+          cp CHANGELOG.md "${RUNNER_TEMP}/CHANGELOG.md"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main
+          git checkout main
+
+          cp "${RUNNER_TEMP}/CHANGELOG.md" CHANGELOG.md
+
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG.md unchanged on main; nothing to commit."
+            exit 0
+          fi
+
+          git add CHANGELOG.md
+          git commit -m "docs(changelog): update for ${GITHUB_REF_NAME} [skip ci]"
+          git push origin main
