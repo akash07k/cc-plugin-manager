@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "cc_plugin_manager",
+  "project_id": "f53568c7-b19a-4e79-a256-399aca55004e"
+}
